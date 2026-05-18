@@ -2,6 +2,7 @@ import streamlit as st
 import pdfplumber
 from deep_translator import GoogleTranslator
 import io
+from fpdf import FPDF
 
 # Configuração da página - Mantendo centrado para focar no texto do livro
 st.set_page_config(page_title="Leitor & Tradutor de Livros", page_icon="📚", layout="centered")
@@ -32,7 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📚 Tradutor & Leitor de Livros")
-st.write("Carregue seu livro, ajuste o idioma e leia confortavelmente diretamente pela tela.")
+st.write("Carregue seu livro, ajuste o idioma, leia na tela ou baixe a versão traduzida em PDF.")
 
 # Barra lateral para configurações
 st.sidebar.header("Configurações")
@@ -57,7 +58,7 @@ if uploaded_file is not None:
     if st.button("✨ Iniciar Tradução e Formatação"):
         try:
             translator = GoogleTranslator(source='auto', target=codigo_destino)
-            texto_traduzido_completo = ""
+            paginas_traduzidas_lista = []
             
             with pdfplumber.open(uploaded_file) as pdf:
                 total_paginas = len(pdf.pages)
@@ -71,7 +72,6 @@ if uploaded_file is not None:
                     texto_original = pagina.extract_text()
                     
                     if texto_original:
-                        # Processando parágrafos
                         paragrafos = texto_original.split("\n")
                         texto_pagina_traduzida = ""
                         
@@ -79,40 +79,64 @@ if uploaded_file is not None:
                             if p.strip():
                                 try:
                                     traducao_linha = translator.translate(p)
-                                    texto_pagina_traduzida += traducao_linha + "\n\n" # Garante espaçamento entre parágrafos
+                                    texto_pagina_traduzida += traducao_linha + "\n\n"
                                 except:
                                     texto_pagina_traduzida += p + "\n\n"
                         
-                        # Interface de leitura organizada por abas para não poluir a tela
+                        # Interface de leitura organizada por abas
                         st.markdown(f"<h3 class='titulo-pagina'>Página {i+1}</h3>", unsafe_allow_html=True)
-                        
                         aba_traduzida, aba_original = st.tabs(["✨ Texto Traduzido", "📄 Texto Original"])
                         
                         with aba_traduzida:
-                            # Renderiza o texto dentro do container estilizado de e-book
                             st.markdown(f"<div class='caixa-leitura'>{texto_pagina_traduzida}</div>", unsafe_allow_html=True)
                         
                         with aba_original:
                             st.markdown(f"<div class='caixa-leitura' style='background-color: #f5f6fa;'>{texto_original}</div>", unsafe_allow_html=True)
                         
-                        texto_traduzido_completo += f"--- PÁGINA {i+1} ---\n\n{texto_pagina_traduzida}\n\n"
+                        st.markdown("---")
+                        
+                        # Guarda o texto gerado para compilar o PDF no final
+                        paginas_traduzidas_lista.append((i+1, texto_pagina_traduzida))
                     
                     progresso.progress((i + 1) / total_paginas)
                 
                 status_text.text("✨ Livro totalmente processado!")
                 
-                # Preparando download
-                buffer = io.BytesIO()
-                buffer.write(texto_traduzido_completo.encode("utf-8"))
-                buffer.seek(0)
+                # --- GERAÇÃO DO NOVO PDF TRADUZIDO ---
+                status_text.text("⏳ Gerando arquivo PDF traduzido...")
+                pdf_saida = FPDF()
+                pdf_saida.set_auto_page_break(auto=True, margin=15)
+                
+                for num_pag, texto_pag in paginas_traduzidas_lista:
+                    pdf_saida.add_page()
+                    
+                    # Configura cabeçalho da página do PDF
+                    pdf_saida.set_font("Helvetica", "B", 14)
+                    pdf_saida.cell(0, 10, f"Pagina {num_pag}", ln=True, align="C")
+                    pdf_saida.ln(5)
+                    
+                    # Configura o corpo de texto do PDF
+                    pdf_saida.set_font("Helvetica", "", 11)
+                    
+                    # Tratamento padrão de encoding para evitar erros com acentuação em PDFs gerados via Python
+                    texto_limpo = texto_pag.encode('latin-1', 'replace').decode('latin-1')
+                    
+                    # Escreve o texto adaptando as linhas às margens automaticamente
+                    pdf_saida.multi_cell(0, 6, texto_limpo)
+                
+                # Salva o PDF final em memória estruturada
+                pdf_bytes = pdf_saida.output()
+                buffer_pdf = io.BytesIO(pdf_bytes)
                 
                 st.sidebar.markdown("---")
                 st.sidebar.success("Tradução Concluída!")
+                
+                # Botão para baixar diretamente em formato PDF
                 st.sidebar.download_button(
-                    label=f"📥 Baixar Livro Completo ({idioma_destino_nome})",
-                    data=buffer,
-                    file_name=f"livro_traduzido_{codigo_destino}.txt",
-                    mime="text/plain"
+                    label=f"📥 Baixar Livro em PDF ({idioma_destino_nome})",
+                    data=buffer_pdf,
+                    file_name=f"livro_traduzido_{codigo_destino}.pdf",
+                    mime="application/pdf"
                 )
                 
         except Exception as e:
