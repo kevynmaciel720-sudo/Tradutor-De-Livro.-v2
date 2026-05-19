@@ -51,9 +51,13 @@ def baixar_fonte_utf8():
 
 caminho_fonte = baixar_fonte_utf8()
 
-# Inicializando o Histórico de Downloads na memória do Streamlit se não existir
+# Inicializando as variáveis na memória do Streamlit (Session State) para não sumirem
 if 'blocos_salvos' not in st.session_state:
     st.session_state['blocos_salvos'] = []
+if 'pdf_total_bytes' not in st.session_state:
+    st.session_state['pdf_total_bytes'] = None
+if 'livro_nome_final' not in st.session_state:
+    st.session_state['livro_nome_final'] = ""
 
 # Barra lateral para configurações
 st.sidebar.header("⚙️ Configurações")
@@ -75,66 +79,72 @@ pagina_inicio = st.sidebar.number_input("Começar a tradução a partir da pági
 
 uploaded_file = st.file_uploader("Selecione o arquivo PDF do livro", type=["pdf"])
 
-# Função auxiliar atualizada para gerar PDF com suporte real e nativo a UTF-8
+# Função auxiliar para gerar PDF com suporte real a UTF-8
 def gerar_pdf_bytes(lista_paginas):
     pdf_saida = FPDF()
     pdf_saida.set_auto_page_break(auto=True, margin=15)
     
-    # Se a fonte TrueType foi baixada com sucesso, nós a registramos no sistema de PDF
     if caminho_fonte:
         pdf_saida.add_font("DejaVu", "", caminho_fonte, uni=True)
-        nome_fonte = "DejaVu"
-    else:
-        nome_fonte = "Helvetica" # Fallback caso falhe o download
-        
+    
     for num_pag, texto_pag in lista_paginas:
         pdf_saida.add_page()
         
-        # Cabeçalho da página
         if caminho_fonte:
             pdf_saida.set_font("DejaVu", "", 14)
-        else:
-            pdf_saida.set_font("Helvetica", "B", 14)
-            
-        pdf_saida.cell(0, 10, f"Página {num_pag}", ln=True, align="C")
-        pdf_saida.ln(5)
-        
-        # Corpo do texto
-        if caminho_fonte:
+            pdf_saida.cell(0, 10, f"Página {num_pag}", ln=True, align="C")
+            pdf_saida.ln(5)
             pdf_saida.set_font("DejaVu", "", 10)
-            # Unicode Real: Não precisa decodificar para latin-1! Enviamos a string limpa diretamente
             texto_final = texto_pag
         else:
+            pdf_saida.set_font("Helvetica", "B", 14)
+            pdf_saida.cell(0, 10, f"Página {num_pag}", ln=True, align="C")
+            pdf_saida.ln(5)
             pdf_saida.set_font("Helvetica", "", 11)
-            # Tratamento caso use a fonte padrão sem Unicode
             texto_final = texto_pag.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("—", "-")
             texto_final = texto_final.encode('latin-1', 'replace').decode('latin-1')
         
         pdf_saida.multi_cell(0, 6, texto_final)
         
-    # Gera os bytes finais de maneira totalmente segura
     return pdf_saida.output(dest='S') if hasattr(pdf_saida, 'output') else pdf_saida.output()
 
-# Se existirem blocos gerados anteriormente na sessão, mostra eles fixos na barra lateral
-if st.session_state['blocos_salvos']:
+# --- RENDERIZAÇÃO DA BARRA LATERAL (Sempre visível) ---
+if st.session_state['blocos_salvos'] or st.session_state['pdf_total_bytes']:
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 💾 Blocos Parciais Disponíveis")
-    for titulo, pdf_data, nome_arq in st.session_state['blocos_salvos']:
+    st.sidebar.markdown("### 💾 Arquivos Disponíveis para Download")
+    
+    # Botão do PDF Total Completo
+    if st.session_state['pdf_total_bytes'] is not None:
+        st.sidebar.success("🎉 Livro Completo Traduzido!")
         st.sidebar.download_button(
-            label=titulo,
-            data=pdf_data,
-            file_name=nome_arq,
+            label="📥 Baixar PDF Total Traduzido",
+            data=st.session_state['pdf_total_bytes'],
+            file_name=st.session_state['livro_nome_final'],
             mime="application/pdf",
-            key=f"sidebar_{titulo}"
+            key="btn_completo_sidebar"
         )
+        st.sidebar.markdown("---")
+        
+    # Lista de Botões dos Blocos de 50 páginas
+    if st.session_state['blocos_salvos']:
+        st.sidebar.markdown("**Lotes Parciais:**")
+        for idx, bloco in enumerate(st.session_state['blocos_salvos']):
+            st.sidebar.download_button(
+                label=bloco['titulo'],
+                data=bloco['data'],
+                file_name=bloco['nome_arquivo'],
+                mime="application/pdf",
+                key=f"sidebar_bloco_{idx}"
+            )
+            
+    if st.sidebar.button("🗑️ Limpar Todos os Downloads"):
+        st.session_state['blocos_salvos'] = []
+        st.session_state['pdf_total_bytes'] = None
+        st.session_state['livro_nome_final'] = ""
+        st.rerun()
 
 if uploaded_file is not None:
     st.success("Livro carregado com sucesso!")
-    
-    # Botão para limpar o histórico caso mude de livro
-    if st.sidebar.button("🗑️ Limpar Downloads Parciais Antigos"):
-        st.session_state['blocos_salvos'] = []
-        st.rerun()
         
     if st.button("✨ Iniciar Tradução e Formatação"):
         try:
@@ -193,18 +203,17 @@ if uploaded_file is not None:
                                 p_inicial_bloco = bloco_atual[0][0]
                                 p_final_bloco = bloco_atual[-1][0]
                                 
-                                # Gera o PDF do bloco atual usando a nova função com fontes TrueType
+                                # Gera o PDF estável do lote de 50 páginas
                                 pdf_bloco_bytes = gerar_pdf_bytes(bloco_atual)
-                                buffer_bloco = io.BytesIO(pdf_bloco_bytes)
                                 
-                                # Salva permanentemente na sessão
-                                st.session_state['blocos_salvos'].append((
-                                    f"📥 Baixar Págs {p_inicial_bloco}-{p_final_bloco}",
-                                    buffer_bloco,
-                                    f"bloco_paginas_{p_inicial_bloco}_a_{p_final_bloco}.pdf"
-                                ))
+                                # Guarda como dicionário estruturado na sessão persistente
+                                st.session_state['blocos_salvos'].append({
+                                    'titulo': f"📥 Baixar Págs {p_inicial_bloco}-{p_final_bloco}",
+                                    'data': pdf_bloco_bytes,
+                                    'nome_arquivo': f"bloco_paginas_{p_inicial_bloco}_a_{p_final_bloco}.pdf"
+                                })
                                 
-                                st.toast(f"💾 Bloco das páginas {p_inicial_bloco} a {p_final_bloco} salvo na barra lateral!", icon="💾")
+                                st.toast(f"💾 Bloco das páginas {p_inicial_bloco} a {p_final_bloco} adicionado à barra lateral!", icon="💾")
                                 
                                 bloco_atual = []
                         
@@ -220,26 +229,17 @@ if uploaded_file is not None:
                         p_in = bloco_atual[0][0]
                         p_fi = bloco_atual[-1][0]
                         pdf_final_bytes = gerar_pdf_bytes(bloco_atual)
-                        st.session_state['blocos_salvos'].append((
-                            f"📥 Baixar Págs {p_in}-{p_fi} (Final)",
-                            io.BytesIO(pdf_final_bytes),
-                            f"bloco_final_{p_in}_a_{p_fi}.pdf"
-                        ))
+                        st.session_state['blocos_salvos'].append({
+                            'titulo': f"📥 Baixar Págs {p_in}-{p_fi} (Lote Final)",
+                            'data': pdf_final_bytes,
+                            'nome_arquivo': f"bloco_final_{p_in}_a_{p_fi}.pdf"
+                        })
                     
-                    # PDF do Livro Inteiro
-                    pdf_total_bytes = gerar_pdf_bytes(paginas_traduzidas_total)
-                    buffer_pdf = io.BytesIO(pdf_total_bytes)
+                    # Salva os dados do PDF Completo na Sessão Permanente
+                    st.session_state['pdf_total_bytes'] = gerar_pdf_bytes(paginas_traduzidas_total)
+                    st.session_state['livro_nome_final'] = f"livro_completo_desde_pag_{pagina_inicio}.pdf"
                     
-                    st.sidebar.markdown("---")
-                    st.sidebar.success("Tradução Completa!")
-                    st.sidebar.download_button(
-                        label=f"📥 Baixar PDF Total Traduzido",
-                        data=buffer_pdf,
-                        file_name=f"livro_completo_desde_pag_{pagina_inicio}.pdf",
-                        mime="application/pdf",
-                        key="btn_completo_final"
-                    )
-                    
+                    # Recarrega de forma limpa para exibir todos os botões guardados na barra lateral
                     st.rerun()
                 
         except Exception as e:
