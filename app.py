@@ -59,18 +59,32 @@ pagina_inicio = st.sidebar.number_input("Começar a tradução a partir da pági
 
 uploaded_file = st.file_uploader("Selecione o arquivo PDF do livro", type=["pdf"])
 
-# Função auxiliar estável para gerar o PDF
+# Nova função auxiliar atualizada com suporte nativo a UTF-8 para evitar as '?'
 def gerar_pdf_bytes(lista_paginas):
-    pdf_saida = FPDF()
+    # 'core_fonts_encoding="utf-8"' força o FPDF a processar acentos corretamente
+    pdf_saida = FPDF(core_fonts_encoding="utf-8")
     pdf_saida.set_auto_page_break(auto=True, margin=15)
+    
     for num_pag, texto_pag in lista_paginas:
         pdf_saida.add_page()
+        
+        # Cabeçalho da página
         pdf_saida.set_font("Helvetica", "B", 14)
-        pdf_saida.cell(0, 10, f"Pagina {num_pag}", ln=True, align="C")
+        pdf_saida.cell(0, 10, f"Página {num_pag}", ln=True, align="C")
         pdf_saida.ln(5)
+        
+        # Corpo de texto usando Helvetica (que aceita caracteres latinos em UTF-8)
         pdf_saida.set_font("Helvetica", "", 11)
-        texto_limpo = texto_pag.encode('latin-1', 'replace').decode('latin-1')
-        pdf_saida.multi_cell(0, 6, texto_limpo)
+        
+        # Substitui caracteres especiais problemáticos (como aspas curvas inteligentes do Word/PDF) por caracteres padrão
+        texto_tratado = texto_pag.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("—", "-")
+        
+        # Converte explicitamente para strings compatíveis com UTF-8/latin1 de forma segura
+        texto_final = texto_tratado.encode('utf-8', 'ignore').decode('utf-8')
+        
+        pdf_saida.multi_cell(0, 6, texto_final)
+        
+    # Retorna os bytes diretamente
     return pdf_saida.output()
 
 # Se existirem blocos gerados anteriormente na sessão, mostra eles fixos na barra lateral
@@ -110,13 +124,13 @@ if uploaded_file is not None:
                     st.info(f"Traduzindo da página {pagina_inicio} até {total_paginas}...")
                     
                     progresso = st.progress(0)
-                    status_text = st.empty()
+                    st_status = st.empty()
                     
                     for i in range(pagina_inicio - 1, total_paginas):
                         pagina = pdf.pages[i]
                         num_real_pagina = i + 1
                         
-                        status_text.text(f"📖 Processando página {num_real_pagina} de {total_paginas}...")
+                        st_status.text(f"📖 Processando página {num_real_pagina} de {total_paginas}...")
                         
                         texto_original = pagina.extract_text()
                         
@@ -151,21 +165,19 @@ if uploaded_file is not None:
                                 p_inicial_bloco = bloco_atual[0][0]
                                 p_final_bloco = bloco_atual[-1][0]
                                 
-                                # Gera o PDF do bloco atual
+                                # Gera o PDF corrigido do bloco atual
                                 pdf_bloco_bytes = gerar_pdf_bytes(bloco_atual)
                                 buffer_bloco = io.BytesIO(pdf_bloco_bytes)
                                 
-                                # Salva permanentemente na sessão para o botão ficar visível fixo
+                                # Salva permanentemente na sessão
                                 st.session_state['blocos_salvos'].append((
                                     f"📥 Baixar Págs {p_inicial_bloco}-{p_final_bloco}",
                                     buffer_bloco,
                                     f"bloco_paginas_{p_inicial_bloco}_a_{p_final_bloco}.pdf"
                                 ))
                                 
-                                # Dá um aviso na tela principal e força uma atualização visual na barra lateral
                                 st.toast(f"💾 Bloco das páginas {p_inicial_bloco} a {p_final_bloco} salvo na barra lateral!", icon="💾")
                                 
-                                # Limpa o bloco para as próximas 50
                                 bloco_atual = []
                         
                         # Atualiza a barra de progresso
@@ -173,9 +185,9 @@ if uploaded_file is not None:
                         atual_traduzido = (i - (pagina_inicio - 1)) + 1
                         progresso.progress(atual_traduzido / total_a_traduzir)
                     
-                    status_text.text("✨ Processamento concluído!")
+                    st_status.text("✨ Processamento concluído!")
                     
-                    # Se sobrou algum bloco que não completou 50 páginas exatas no final do livro
+                    # Bloco final (sobras de páginas que não somaram 50 exatas)
                     if bloco_atual and len(paginas_traduzidas_total) > len(bloco_atual):
                         p_in = bloco_atual[0][0]
                         p_fi = bloco_atual[-1][0]
@@ -186,7 +198,7 @@ if uploaded_file is not None:
                             f"bloco_final_{p_in}_a_{p_fi}.pdf"
                         ))
                     
-                    # PDF do Livro Inteiro traduzido a partir da página escolhida
+                    # PDF do Livro Inteiro
                     pdf_total_bytes = gerar_pdf_bytes(paginas_traduzidas_total)
                     buffer_pdf = io.BytesIO(pdf_total_bytes)
                     
@@ -200,7 +212,6 @@ if uploaded_file is not None:
                         key="btn_completo_final"
                     )
                     
-                    # Recarrega para garantir que todos os botões novos apareçam na barra lateral imediatamente
                     st.rerun()
                 
         except Exception as e:
