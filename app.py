@@ -2,6 +2,8 @@ import streamlit as st
 import pdfplumber
 from deep_translator import GoogleTranslator
 import io
+import os
+import urllib.request
 from fpdf import FPDF
 
 # Configuração da página - Mantendo centrado para focar no texto do livro
@@ -35,6 +37,20 @@ st.markdown("""
 st.title("📚 Tradutor & Leitor de Livros Pro")
 st.write("Carregue seu livro, ajuste as páginas e baixe suas traduções em blocos de forma segura.")
 
+# Garante o download de uma fonte TrueType robusta para evitar erros de caractere no Linux/Streamlit Cloud
+@st.cache_data
+def baixar_fonte_utf8():
+    font_url = "https://github.com/reingart/pyfpdf/raw/master/fpdf/font/DejaVuSans.ttf"
+    font_path = "DejaVuSans.ttf"
+    if not os.path.exists(font_path):
+        try:
+            urllib.request.urlretrieve(font_url, font_path)
+        except Exception:
+            pass
+    return font_path if os.path.exists(font_path) else None
+
+caminho_fonte = baixar_fonte_utf8()
+
 # Inicializando o Histórico de Downloads na memória do Streamlit se não existir
 if 'blocos_salvos' not in st.session_state:
     st.session_state['blocos_salvos'] = []
@@ -59,33 +75,45 @@ pagina_inicio = st.sidebar.number_input("Começar a tradução a partir da pági
 
 uploaded_file = st.file_uploader("Selecione o arquivo PDF do livro", type=["pdf"])
 
-# Nova função auxiliar atualizada com suporte nativo a UTF-8 para evitar as '?'
+# Função auxiliar atualizada para gerar PDF com suporte real e nativo a UTF-8
 def gerar_pdf_bytes(lista_paginas):
-    # 'core_fonts_encoding="utf-8"' força o FPDF a processar acentos corretamente
-    pdf_saida = FPDF(core_fonts_encoding="utf-8")
+    pdf_saida = FPDF()
     pdf_saida.set_auto_page_break(auto=True, margin=15)
     
+    # Se a fonte TrueType foi baixada com sucesso, nós a registramos no sistema de PDF
+    if caminho_fonte:
+        pdf_saida.add_font("DejaVu", "", caminho_fonte, uni=True)
+        nome_fonte = "DejaVu"
+    else:
+        nome_fonte = "Helvetica" # Fallback caso falhe o download
+        
     for num_pag, texto_pag in lista_paginas:
         pdf_saida.add_page()
         
         # Cabeçalho da página
-        pdf_saida.set_font("Helvetica", "B", 14)
+        if caminho_fonte:
+            pdf_saida.set_font("DejaVu", "", 14)
+        else:
+            pdf_saida.set_font("Helvetica", "B", 14)
+            
         pdf_saida.cell(0, 10, f"Página {num_pag}", ln=True, align="C")
         pdf_saida.ln(5)
         
-        # Corpo de texto usando Helvetica (que aceita caracteres latinos em UTF-8)
-        pdf_saida.set_font("Helvetica", "", 11)
-        
-        # Substitui caracteres especiais problemáticos (como aspas curvas inteligentes do Word/PDF) por caracteres padrão
-        texto_tratado = texto_pag.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("—", "-")
-        
-        # Converte explicitamente para strings compatíveis com UTF-8/latin1 de forma segura
-        texto_final = texto_tratado.encode('utf-8', 'ignore').decode('utf-8')
+        # Corpo do texto
+        if caminho_fonte:
+            pdf_saida.set_font("DejaVu", "", 10)
+            # Unicode Real: Não precisa decodificar para latin-1! Enviamos a string limpa diretamente
+            texto_final = texto_pag
+        else:
+            pdf_saida.set_font("Helvetica", "", 11)
+            # Tratamento caso use a fonte padrão sem Unicode
+            texto_final = texto_pag.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("—", "-")
+            texto_final = texto_final.encode('latin-1', 'replace').decode('latin-1')
         
         pdf_saida.multi_cell(0, 6, texto_final)
         
-    # Retorna os bytes diretamente
-    return pdf_saida.output()
+    # Gera os bytes finais de maneira totalmente segura
+    return pdf_saida.output(dest='S') if hasattr(pdf_saida, 'output') else pdf_saida.output()
 
 # Se existirem blocos gerados anteriormente na sessão, mostra eles fixos na barra lateral
 if st.session_state['blocos_salvos']:
@@ -165,7 +193,7 @@ if uploaded_file is not None:
                                 p_inicial_bloco = bloco_atual[0][0]
                                 p_final_bloco = bloco_atual[-1][0]
                                 
-                                # Gera o PDF corrigido do bloco atual
+                                # Gera o PDF do bloco atual usando a nova função com fontes TrueType
                                 pdf_bloco_bytes = gerar_pdf_bytes(bloco_atual)
                                 buffer_bloco = io.BytesIO(pdf_bloco_bytes)
                                 
